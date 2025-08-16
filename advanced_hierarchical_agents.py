@@ -44,6 +44,24 @@ load_dotenv()  # Load .env into os.environ
 
 def add_messages(existing: List[BaseMessage], new: List[BaseMessage]) -> List[BaseMessage]:
     """Enhanced message reducer with deduplication"""
+    def to_message(msg):
+        if isinstance(msg, dict):
+            role = msg.get("role", "user")  # Default to "user" if missing
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = ' '.join([item.get('text', '') if isinstance(item, dict) and item.get('type') == 'text' else '' for item in content])
+            if role == "user":
+                return HumanMessage(content=content)
+            elif role == "assistant":
+                return AIMessage(content=content)
+            elif role == "system":
+                return SystemMessage(content=content)
+            else:
+                return HumanMessage(content=content)  # Default to HumanMessage
+        return msg
+
+    existing = [to_message(m) for m in existing]
+    new = [to_message(m) for m in new]
     all_messages = existing + new
     seen = set()
     unique_messages = []
