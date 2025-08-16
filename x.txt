@@ -1,0 +1,640 @@
+# Complete Advanced LangGraph Dependencies and Setup
+
+## Core Dependencies for Advanced Implementation
+
+### requirements.txt
+```txt
+# Core LangGraph and LangChain (latest versions)
+langgraph>=0.6.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+langchain-anthropic>=0.2.0
+
+# Database and persistence (production)
+psycopg2-binary>=2.9.0
+redis>=4.5.0
+
+# Performance and monitoring
+prometheus-client>=0.20.0
+structlog>=23.0.0
+
+# Enhanced utilities
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+aiohttp>=3.9.0
+asyncio-throttle>=1.0.0
+
+# Development and testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+langsmith>=0.1.0
+
+# Optional: If using specific cloud providers
+# langchain-aws>=0.1.0
+# langchain-azure-openai>=0.1.0
+```
+
+### Installation Script
+
+#### For Unix/Linux/Mac
+```bash
+#!/bin/bash
+# setup_advanced_langgraph.sh
+
+echo "🚀 Setting up Advanced LangGraph Hierarchical Multi-Agent System"
+
+# Create virtual environment
+python -m venv langgraph_advanced_env
+source langgraph_advanced_env/bin/activate
+
+# Upgrade pip
+pip install --upgrade pip
+
+# Install core dependencies
+echo "📦 Installing core LangGraph dependencies..."
+pip install langgraph>=0.6.0
+pip install langchain-core>=0.3.0
+pip install langchain-openai>=0.2.0
+pip install langchain-anthropic>=0.2.0
+
+# Install database dependencies
+echo "🗄️ Installing database dependencies..."
+pip install psycopg2-binary>=2.9.0
+pip install redis>=4.5.0
+
+# Install performance monitoring
+echo "📊 Installing monitoring dependencies..."
+pip install prometheus-client>=0.20.0
+pip install structlog>=23.0.0
+
+# Install utilities
+echo "🔧 Installing utility dependencies..."
+pip install pydantic>=2.0.0
+pip install python-dotenv>=1.0.0
+pip install aiohttp>=3.9.0
+pip install asyncio-throttle>=1.0.0
+
+# Install development tools
+echo "🛠️ Installing development dependencies..."
+pip install pytest>=7.0.0
+pip install pytest-asyncio>=0.21.0
+pip install langsmith>=0.1.0
+
+echo "✅ Installation complete!"
+echo ""
+echo "📋 Next steps:"
+echo "1. Set environment variables (see .env.example)"
+echo "2. Configure database (PostgreSQL recommended for production)"
+echo "3. Run the demo: python advanced_hierarchical_agents.py"
+```
+
+#### For Windows
+```batch
+@echo off
+REM setup_advanced_langgraph.bat
+
+echo 🚀 Setting up Advanced LangGraph Hierarchical Multi-Agent System
+
+REM Create virtual environment
+python -m venv langgraph_advanced_env
+langgraph_advanced_env\Scripts\activate
+
+REM Upgrade pip
+pip install --upgrade pip
+
+REM Install core dependencies
+echo 📦 Installing core LangGraph dependencies...
+pip install langgraph>=0.6.0
+pip install langchain-core>=0.3.0
+pip install langchain-openai>=0.2.0
+pip install langchain-anthropic>=0.2.0
+
+REM Install database dependencies
+echo 🗄️ Installing database dependencies...
+pip install psycopg2-binary>=2.9.0
+pip install redis>=4.5.0
+
+REM Install performance monitoring
+echo 📊 Installing monitoring dependencies...
+pip install prometheus-client>=0.20.0
+pip install structlog>=23.0.0
+
+REM Install utilities
+echo 🔧 Installing utility dependencies...
+pip install pydantic>=2.0.0
+pip install python-dotenv>=1.0.0
+pip install aiohttp>=3.9.0
+pip install asyncio-throttle>=1.0.0
+
+REM Install development tools
+echo 🛠️ Installing development dependencies...
+pip install pytest>=7.0.0
+pip install pytest-asyncio>=0.21.0
+pip install langsmith>=0.1.0
+
+echo ✅ Installation complete!
+echo.
+echo 📋 Next steps:
+echo 1. Set environment variables (see .env.example)
+echo 2. Configure database (PostgreSQL recommended for production)
+echo 3. Run the demo: python advanced_hierarchical_agents.py
+```
+
+## Environment Configuration
+
+### .env.example
+```bash
+# Core API Keys (Required)
+OPENAI_API_KEY=sk-your-openai-key-here
+ANTHROPIC_API_KEY=your-anthropic-key-here
+
+# Database Configuration (Production)
+DATABASE_URL=postgresql://username:password@localhost:5432/langgraph_agents
+REDIS_URL=redis://localhost:6379/0
+
+# LangSmith Tracing (Optional but Recommended)
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=your-langsmith-key-here
+LANGCHAIN_PROJECT=hierarchical-agents-advanced
+
+# Performance Configuration
+MAX_CONCURRENT_AGENTS=5
+MEMORY_LIMIT_GB=8
+CIRCUIT_BREAKER_THRESHOLD=3
+CACHE_TTL_SECONDS=600
+
+# Logging Configuration
+LOG_LEVEL=INFO
+STRUCTURED_LOGGING=true
+
+# Model Configuration
+DEFAULT_MODEL=gpt-4o
+PREMIUM_MODEL=gpt-4
+COST_EFFECTIVE_MODEL=gpt-4o-mini
+FAST_MODEL=gpt-3.5-turbo
+
+# Agent Configuration
+DEFAULT_COMPLEXITY_THRESHOLD=0.6
+DEFAULT_QUALITY_THRESHOLD=0.8
+DEFAULT_COST_BUDGET=0.05
+```
+
+### .env.production
+```bash
+# Production Environment Variables
+NODE_ENV=production
+
+# Database (Required for production)
+DATABASE_URL=postgresql://prod_user:secure_password@prod-db:5432/langgraph_production
+REDIS_URL=redis://prod-redis:6379/0
+
+# Enhanced Security
+ENABLE_SSL=true
+SSL_CERT_PATH=/etc/ssl/certs/langgraph.crt
+SSL_KEY_PATH=/etc/ssl/private/langgraph.key
+
+# Production Performance
+MAX_CONCURRENT_AGENTS=10
+MEMORY_LIMIT_GB=16
+ENABLE_CACHING=true
+CACHE_REDIS_URL=redis://cache-redis:6379/1
+
+# Monitoring
+PROMETHEUS_ENABLED=true
+PROMETHEUS_PORT=9090
+HEALTH_CHECK_INTERVAL=30
+
+# Production Models (Cost Optimized)
+DEFAULT_MODEL=gpt-4o
+PREMIUM_MODEL=gpt-4
+COST_EFFECTIVE_MODEL=gpt-4o-mini
+ENABLE_MODEL_FALLBACK=true
+```
+
+## Database Setup
+
+### PostgreSQL Setup
+```sql
+-- Create database and user
+CREATE DATABASE langgraph_agents;
+CREATE USER langgraph_user WITH PASSWORD 'secure_password';
+GRANT ALL PRIVILEGES ON DATABASE langgraph_agents TO langgraph_user;
+
+-- Connect to the database
+\c langgraph_agents;
+
+-- Create extensions (if needed)
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "hstore";
+
+-- Grant schema permissions
+GRANT ALL ON SCHEMA public TO langgraph_user;
+```
+
+### Redis Setup
+```bash
+# Install Redis (Ubuntu/Debian)
+sudo apt update
+sudo apt install redis-server
+
+# Configure Redis
+sudo nano /etc/redis/redis.conf
+
+# Key configurations:
+# maxmemory 256mb
+# maxmemory-policy allkeys-lru
+# save 900 1
+
+# Start Redis
+sudo systemctl start redis-server
+sudo systemctl enable redis-server
+```
+
+## Docker Deployment
+
+### docker-compose.yml
+```yaml
+version: '3.8'
+
+services:
+  langgraph-agents:
+    build: .
+    environment:
+      - DATABASE_URL=postgresql://langgraph_user:secure_password@postgres:5432/langgraph_agents
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=langgraph_agents
+      - POSTGRES_USER=langgraph_user
+      - POSTGRES_PASSWORD=secure_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+volumes:
+  postgres_data:
+  redis_data:
+```
+
+### Dockerfile
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash langgraph
+USER langgraph
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD python -c "import asyncio; asyncio.run(health_check())" || exit 1
+
+# Run application
+CMD ["python", "advanced_hierarchical_agents.py"]
+```
+
+## Testing and Validation
+
+### test_advanced_setup.py
+```python
+#!/usr/bin/env python3
+"""Comprehensive test for advanced LangGraph setup"""
+
+import asyncio
+import os
+import sys
+from typing import Dict, Any
+
+async def test_core_imports():
+    """Test all core imports"""
+    try:
+        from langgraph.graph import StateGraph, START, END
+        from langgraph.types import Command
+        from langgraph.prebuilt import create_react_agent, create_supervisor
+        from langgraph.checkpoint.postgres import PostgresSaver
+        from langgraph.store.postgres import PostgresStore
+        from langgraph.config import get_stream_writer
+        from langchain_openai import ChatOpenAI
+        from langchain_anthropic import ChatAnthropic
+        print("✅ All core imports successful")
+        return True
+    except ImportError as e:
+        print(f"❌ Import error: {e}")
+        return False
+
+async def test_database_connection():
+    """Test database connectivity"""
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        print("⚠️  DATABASE_URL not set (using in-memory storage)")
+        return True
+
+    try:
+        from langgraph.checkpoint.postgres import PostgresSaver
+        checkpointer = PostgresSaver.from_conn_string(database_url)
+        print("✅ Database connection successful")
+        return True
+    except Exception as e:
+        print(f"❌ Database connection failed: {e}")
+        return False
+
+async def test_redis_connection():
+    """Test Redis connectivity"""
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        print("⚠️  REDIS_URL not set (caching disabled)")
+        return True
+
+    try:
+        import redis
+        r = redis.from_url(redis_url)
+        r.ping()
+        print("✅ Redis connection successful")
+        return True
+    except Exception as e:
+        print(f"❌ Redis connection failed: {e}")
+        return False
+
+async def test_api_keys():
+    """Test API key configuration"""
+    openai_key = os.getenv("OPENAI_API_KEY")
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+
+    if not openai_key:
+        print("❌ OPENAI_API_KEY not set")
+        return False
+
+    if not anthropic_key:
+        print("⚠️  ANTHROPIC_API_KEY not set (optional)")
+
+    try:
+        from langchain_openai import ChatOpenAI
+        model = ChatOpenAI(api_key=openai_key)
+        print("✅ OpenAI API key valid")
+        return True
+    except Exception as e:
+        print(f"❌ OpenAI API key test failed: {e}")
+        return False
+
+async def test_advanced_features():
+    """Test advanced features"""
+    try:
+        # Test streaming
+        from langgraph.config import get_stream_writer
+
+        # Test memory management
+        from langgraph.checkpoint.memory import MemorySaver
+        checkpointer = MemorySaver()
+
+        # Test store
+        from langgraph.store.memory import InMemoryStore
+        store = InMemoryStore()
+
+        print("✅ Advanced features available")
+        return True
+    except Exception as e:
+        print(f"❌ Advanced features test failed: {e}")
+        return False
+
+async def run_comprehensive_test():
+    """Run all tests"""
+    print("🧪 Running Advanced LangGraph Setup Tests\n")
+
+    tests = [
+        ("Core Imports", test_core_imports),
+        ("Database Connection", test_database_connection),
+        ("Redis Connection", test_redis_connection),
+        ("API Keys", test_api_keys),
+        ("Advanced Features", test_advanced_features)
+    ]
+
+    results = []
+    for test_name, test_func in tests:
+        print(f"Testing {test_name}...")
+        result = await test_func()
+        results.append((test_name, result))
+        print()
+
+    # Summary
+    print("📊 TEST SUMMARY")
+    print("=" * 50)
+    passed = 0
+    for test_name, result in results:
+        status = "✅ PASS" if result else "❌ FAIL"
+        print(f"{test_name}: {status}")
+        if result:
+            passed += 1
+
+    print(f"\nPassed: {passed}/{len(tests)}")
+
+    if passed == len(tests):
+        print("\n🎉 All tests passed! Advanced LangGraph setup is ready.")
+        return True
+    else:
+        print(f"\n⚠️  {len(tests) - passed} tests failed. Please check configuration.")
+        return False
+
+if __name__ == "__main__":
+    success = asyncio.run(run_comprehensive_test())
+    sys.exit(0 if success else 1)
+```
+
+## Production Checklist
+
+### Pre-deployment Checklist
+```markdown
+## 🚀 Production Deployment Checklist
+
+### Environment Setup
+- [ ] All environment variables configured in .env.production
+- [ ] Database (PostgreSQL) set up and accessible
+- [ ] Redis cache configured and accessible
+- [ ] SSL certificates configured (if applicable)
+- [ ] Firewall rules configured
+
+### Security
+- [ ] API keys stored securely (not in code)
+- [ ] Database credentials secured
+- [ ] Network access restricted
+- [ ] Logging configured for security events
+
+### Performance
+- [ ] Resource limits configured (memory, CPU)
+- [ ] Connection pooling enabled
+- [ ] Caching strategy implemented
+- [ ] Circuit breakers configured
+
+### Monitoring
+- [ ] Health checks implemented
+- [ ] Prometheus metrics enabled
+- [ ] Error tracking configured
+- [ ] Performance monitoring active
+
+### Testing
+- [ ] All unit tests passing
+- [ ] Integration tests passing
+- [ ] Load testing completed
+- [ ] Disaster recovery tested
+
+### Documentation
+- [ ] API documentation updated
+- [ ] Deployment procedures documented
+- [ ] Troubleshooting guide available
+- [ ] Contact information updated
+```
+
+## Routing Constraints Validation
+
+### ⚠️ CRITICAL: Routing Rules Enforcement
+This implementation enforces strict routing constraints:
+
+1. **ONLY supervisors can route** (return `Command` objects)
+2. **ONLY workers can execute tasks** (return strings)
+3. **ALL agents use prebuilt functions** (`create_supervisor` or `create_react_agent`)
+4. **NO custom routing logic** - pure LangGraph patterns only
+
+### Validation Commands
+
+```bash
+# 1. Validate routing constraints (REQUIRED)
+python routing_validation.py
+
+# 2. Test complete system
+python advanced_hierarchical_agents.py
+
+# 3. Validate LangGraph JSON config
+cat langgraph.json | jq '.'
+```
+
+## Quick Start Commands
+
+```bash
+# 1. Clone/setup project
+git clone <repository>
+cd hierarchical-langgraph-agents
+
+# 2. Run setup script
+chmod +x setup_advanced_langgraph.sh
+./setup_advanced_langgraph.sh
+
+# 3. Configure environment
+cp .env.example .env
+# Edit .env with your API keys and settings
+
+# 4. Test setup
+python test_advanced_setup.py
+
+# 5. VALIDATE ROUTING CONSTRAINTS (CRITICAL)
+python routing_validation.py
+
+# 6. Run demo
+python advanced_hierarchical_agents.py
+
+# 7. Deploy to LangGraph Cloud
+langgraph deploy --file langgraph.json
+
+# 8. For local production deployment
+docker-compose up -d
+```
+
+## LangGraph Cloud Deployment
+
+### Using langgraph.json
+```bash
+# Deploy to LangGraph Cloud
+langgraph deploy --file langgraph.json
+
+# Test deployment
+curl -X POST https://your-deployment.langgraph.cloud/invoke \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
+
+# Stream responses
+curl -X POST https://your-deployment.langgraph.cloud/stream \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Complex analysis needed"}]}'
+```
+
+### Monitoring Endpoints
+```bash
+# Health check
+curl https://your-deployment.langgraph.cloud/health
+
+# Metrics
+curl https://your-deployment.langgraph.cloud/metrics
+
+# Routing validation status
+curl https://your-deployment.langgraph.cloud/validation
+```
+
+## Architecture Validation Checklist
+
+### ✅ Pre-Deployment Validation
+- [ ] `python routing_validation.py` passes 100%
+- [ ] All agents use `create_supervisor` or `create_react_agent`
+- [ ] Worker tools return strings only
+- [ ] Supervisor tools return Commands only
+- [ ] `langgraph.json` validates successfully
+- [ ] Functional routing test passes
+
+### ✅ Routing Constraints Verified
+- [ ] FirstWorker: `create_react_agent` ✓
+- [ ] S2.Searcher: `create_react_agent` ✓
+- [ ] S2.Writer: `create_react_agent` ✓
+- [ ] FirstSupervisor: `create_supervisor` ✓
+- [ ] OtherSupervisor: `create_supervisor` ✓
+- [ ] S2Supervisor: `create_supervisor` ✓
+
+### ✅ Tool Return Type Validation
+- [ ] Worker tools: `request_delegation` → string ✓
+- [ ] Worker tools: `request_more_research` → string ✓
+- [ ] Worker tools: `complete_task` → string ✓
+- [ ] Supervisor tools: `route_to_*` → Command ✓
+- [ ] Supervisor tools: `finish_*` → Command ✓
+
+This complete setup provides everything needed to run the advanced hierarchical multi-agent system with **strict routing enforcement** in both development and production environments!

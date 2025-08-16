@@ -1,0 +1,18 @@
+{
+  "graphs": {
+    "main_graph": "advanced_hierarchical_agents.py:main_agent_entry"
+  },
+  "dependencies": [
+    "langgraph>=0.6.0",
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0"
+  ],
+  "environment": {
+    "OPENAI_API_KEY": {
+      "required": true
+    },
+    "DATABASE_URL": {
+      "required": false
+    }
+  }
+}

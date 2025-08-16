@@ -1,0 +1,22 @@
+[project]
+name = "multi-agent-langgraph"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "langchain>=0.3.27",
+    "langchain-anthropic>=0.3.18",
+    "langchain-openai>=0.3.30",
+    "langgraph>=0.6.5",
+    "langgraph-checkpoint-postgres>=2.0.23",
+    "langgraph-cli[inmem]>=0.3.6",
+    "langgraph-prebuilt>=0.6.4",
+    "langgraph-supervisor>=0.0.29",
+    "langmem>=0.0.29",
+    "psycopg2-binary>=2.9.10",
+    "psycopg[binary,pool]>=3.2.9",
+    "pydantic>=2.11.7",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "python-dotenv>=1.1.1",
+]

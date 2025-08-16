@@ -1,0 +1,102 @@
+{
+  "node_mapping": {
+    "main_graph": "__main__:main_agent_entry"
+  },
+  "graphs": {
+    "main_agent_entry": {
+      "title": "Hierarchical Multi-Agent System",
+      "description": "Production hierarchical multi-agent system with strict routing controls. Only supervisors can route, workers can only execute tasks and request help.",
+      "entry_point": "first_supervisor",
+      "state_schema": "HierarchicalAgentState",
+      "checkpointer": true,
+      "store": true,
+      "streaming": {
+        "enabled": true,
+        "modes": ["updates", "custom"]
+      }
+    }
+  },
+  "routing_constraints": {
+    "supervisor_agents": [
+      "first_supervisor",
+      "other_supervisor",
+      "s2_supervisor"
+    ],
+    "worker_agents": [
+      "first_worker",
+      "s2_searcher",
+      "s2_writer"
+    ],
+    "routing_rule": "Only supervisor_agents can return Command objects for routing. Worker_agents can only return strings and use request tools."
+  },
+  "agent_architecture": {
+    "supervisor_tools": [
+      "route_to_other_supervisor",
+      "finish_first_level",
+      "route_to_s2_team",
+      "finish_other_level",
+      "route_to_s2_searcher",
+      "route_to_s2_writer",
+      "complete_s2_team"
+    ],
+    "worker_tools": [
+      "request_delegation",
+      "request_more_research",
+      "complete_task"
+    ]
+  },
+  "dependencies": [
+    "langgraph>=0.6.0",
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langchain-anthropic>=0.2.0",
+    "psycopg2-binary>=2.9.0"
+  ],
+  "environment": {
+    "OPENAI_API_KEY": {
+      "required": true,
+      "description": "OpenAI API key for LLM models"
+    },
+    "ANTHROPIC_API_KEY": {
+      "required": false,
+      "description": "Anthropic API key for Claude models (optional)"
+    },
+    "DATABASE_URL": {
+      "required": false,
+      "description": "PostgreSQL connection string for persistent checkpointing"
+    },
+    "REDIS_URL": {
+      "required": false,
+      "description": "Redis connection string for caching"
+    }
+  },
+  "configuration": {
+    "default_model": "gpt-4o",
+    "supervisor_model": "gpt-4",
+    "worker_model_mapping": {
+      "researcher": "gpt-4o",
+      "writer": "gpt-4o",
+      "chat_interface": "gpt-4o-mini"
+    },
+    "performance": {
+      "max_concurrent_agents": 5,
+      "circuit_breaker_threshold": 3,
+      "cache_ttl_seconds": 600
+    }
+  },
+  "deployment": {
+    "health_check_endpoint": "/health",
+    "metrics_endpoint": "/metrics",
+    "api_version": "v1",
+    "supported_operations": [
+      "invoke",
+      "stream",
+      "batch"
+    ]
+  },
+  "validation": {
+    "routing_enforcement": true,
+    "prebuilt_agents_only": true,
+    "strict_tool_typing": true
+  }
+}
