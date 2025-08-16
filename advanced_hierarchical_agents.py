@@ -18,8 +18,8 @@ import operator
 import json
 
 # Core LangGraph imports
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
-from langchain_core.tools import tool
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage, ToolMessage
+from langchain_core.tools import tool, InjectedToolCallId
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langgraph.graph import StateGraph, MessagesState, START, END
@@ -44,12 +44,15 @@ load_dotenv()  # Load .env into os.environ
 
 def add_messages(existing: List[BaseMessage], new: List[BaseMessage]) -> List[BaseMessage]:
     """Enhanced message reducer with deduplication"""
+
     def to_message(msg):
         if isinstance(msg, dict):
             role = msg.get("role", "user")  # Default to "user" if missing
             content = msg.get("content", "")
             if isinstance(content, list):
-                content = ' '.join([item.get('text', '') if isinstance(item, dict) and item.get('type') == 'text' else '' for item in content])
+                content = ' '.join(
+                    [item.get('text', '') if isinstance(item, dict) and item.get('type') == 'text' else '' for item in
+                     content])
             if role == "user":
                 return HumanMessage(content=content)
             elif role == "assistant":
@@ -154,6 +157,11 @@ class ModelSelector:
 model_selector = ModelSelector()
 
 
+def _ok(tool_call_id: str, text: str = "OK") -> Dict[str, Any]:
+    # Return a messages list containing the ToolMessage that "completes" the tool call
+    return {"messages": [ToolMessage(content=text, tool_call_id=tool_call_id)]}
+
+
 # =============================================================================
 # WORKER TOOLS (STRING RETURNS ONLY - NO ROUTING)
 # =============================================================================
@@ -181,11 +189,12 @@ def complete_task(summary: str, confidence: float = 0.8) -> str:
 # =============================================================================
 
 @tool
-def route_to_other_supervisor(context: str, priority: str = "normal") -> Command:
+def route_to_other_supervisor(tool_call_id: Annotated[str, InjectedToolCallId],context: str, priority: str = "normal") -> Command:
     """FirstSupervisor tool for routing to OtherSupervisor"""
     return Command(
         goto="other_supervisor",
         update={
+            **_ok(tool_call_id, "route_to_other_supervisor"),
             "first_note": f"Delegated to specialized teams: {context}",
             "delegation_history": [{
                 "from": "first_supervisor",
@@ -198,11 +207,13 @@ def route_to_other_supervisor(context: str, priority: str = "normal") -> Command
 
 
 @tool
-def finish_first_level(summary: str, confidence: float = 0.8) -> Command:
+def finish_first_level(tool_call_id: Annotated[str, InjectedToolCallId], summary: str,
+                       confidence: float = 0.8) -> Command:
     """FirstSupervisor tool for completing first level"""
     return Command(
         goto="first_finish",
         update={
+            **_ok(tool_call_id, "finish_first_level: done"),
             "first_note": summary,
             "completion_timestamp": time.time()
         }
@@ -210,11 +221,13 @@ def finish_first_level(summary: str, confidence: float = 0.8) -> Command:
 
 
 @tool
-def route_to_s2_team(task_description: str, complexity: float = 0.5) -> Command:
+def route_to_s2_team(tool_call_id: Annotated[str, InjectedToolCallId],task_description: str, complexity: float = 0.5) -> Command:
     """OtherSupervisor tool for routing to S2 team"""
     return Command(
+
         goto="s2_team",
         update={
+            **_ok(tool_call_id, "route_to_s2_team"),
             "other_note": f"Delegated to S2 team: {task_description}",
             "task_complexity": complexity
         }
@@ -222,11 +235,12 @@ def route_to_s2_team(task_description: str, complexity: float = 0.5) -> Command:
 
 
 @tool
-def finish_other_level(summary: str, quality_score: float = 0.8) -> Command:
+def finish_other_level(tool_call_id: Annotated[str, InjectedToolCallId],summary: str, quality_score: float = 0.8) -> Command:
     """OtherSupervisor tool for completing other level"""
     return Command(
         goto="other_finish",
         update={
+            **_ok(tool_call_id, "finish_other_level: done"),
             "other_note": summary,
             "completion_timestamp": time.time()
         }
@@ -234,26 +248,33 @@ def finish_other_level(summary: str, quality_score: float = 0.8) -> Command:
 
 
 @tool
-def route_to_s2_searcher(research_scope: str = "comprehensive") -> Command:
+def route_to_s2_searcher(tool_call_id: Annotated[str, InjectedToolCallId],research_scope: str = "comprehensive") -> Command:
     """S2Supervisor tool for routing to searcher"""
-    return Command(goto="s2_searcher")
+    return Command(
+        goto="s2_searcher",
+        update=_ok(tool_call_id, f"route_to_s2_searcher: {research_scope}"),
+    )
 
 
 @tool
-def route_to_s2_writer(synthesis_mode: str = "strategic") -> Command:
+def route_to_s2_writer(tool_call_id: Annotated[str, InjectedToolCallId],synthesis_mode: str = "strategic") -> Command:
     """S2Supervisor tool for routing to writer"""
-    return Command(goto="s2_writer")
+    return Command(
+        goto="s2_writer",
+        update=_ok(tool_call_id, f"route_to_s2_writer: {synthesis_mode}"),
+    )
 
 
 @tool
-def complete_s2_team(summary: str, quality_score: float = 0.8) -> Command:
+def complete_s2_team(tool_call_id: Annotated[str, InjectedToolCallId],summary: str, quality_score: float = 0.8) -> Command:
     """S2Supervisor tool for completing S2 team work"""
     return Command(
         goto="s2_return",
         update={
+            **_ok(tool_call_id, "complete_s2_team: done"),
             "s2_summary": summary,
-            "completion_timestamp": time.time()
-        }
+            "completion_timestamp": time.time(),
+        },
     )
 
 
