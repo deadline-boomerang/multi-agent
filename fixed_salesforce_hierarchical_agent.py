@@ -10,6 +10,11 @@ Key Fixes:
 6. Changed supervisor nodes to functions to avoid intermediate messages
 7. Added end_node to set results without adding messages
 8. Ensured only one final AI response from specialist
+9. In end_func, overwrite messages to keep only the final specialist response
+10. Added supervisor_review node to receive specialist response and pass it back
+11. Removed completion tools from specialists and updated prompts to respond directly with prefixed content
+12. Updated main graph routing to go to END after sub-supervisors if results present, avoiding extra MainSupervisor run
+13. Changed internal task messages to SystemMessage instead of HumanMessage to ensure they are treated as system-level instructions
 """
 
 import asyncio
@@ -391,42 +396,6 @@ def analyze_salesforce_data(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # =============================================================================
-# SPECIALIST COMPLETION TOOLS
-# =============================================================================
-
-@tool
-def complete_schema_analysis(schema_info: str, object_types: str = "Account,Contact") -> str:
-    """Schema Specialist completes schema analysis"""
-    result = f"SCHEMA_COMPLETE: Analyzed {object_types} - {schema_info}"
-    agent_logger.debug(f"TOOL: complete_schema_analysis -> {result[:100]}...")
-    return result
-
-
-@tool
-def complete_query_execution(query: str, result_count: int = 0) -> str:
-    """Query Specialist completes SOQL query execution"""
-    result = f"QUERY_COMPLETE: Executed '{query}' - Found {result_count} records"
-    agent_logger.debug(f"TOOL: complete_query_execution -> {result[:100]}...")
-    return result
-
-
-@tool
-def complete_validation_check(validation_status: str, issues_found: int = 0) -> str:
-    """Validation Specialist completes validation"""
-    result = f"VALIDATION_COMPLETE: {validation_status} - {issues_found} issues found"
-    agent_logger.debug(f"TOOL: complete_validation_check -> {result[:100]}...")
-    return result
-
-
-@tool
-def complete_analysis_task(analysis: str, insights: str = "standard") -> str:
-    """Analysis Specialist completes data analysis"""
-    result = f"ANALYSIS_COMPLETE: {analysis} (insights: {insights})"
-    agent_logger.debug(f"TOOL: complete_analysis_task -> {result[:100]}...")
-    return result
-
-
-# =============================================================================
 # MAIN SUPERVISOR DELEGATION TOOLS
 # =============================================================================
 
@@ -518,26 +487,6 @@ def delegate_to_analysis_supervisor_from_main(
     )
 
 
-@tool
-def complete_salesforce_workflow(
-        tool_call_id: Annotated[str, InjectedToolCallId],
-        final_summary: str
-) -> Command:
-    """Complete the entire Salesforce workflow"""
-    agent_logger.info(f"COMPLETE: Salesforce workflow | {final_summary}")
-
-    state_update = {
-        "messages": [create_tool_response(tool_call_id, f"Salesforce workflow complete: {final_summary}")],
-        "completion_timestamp": time.time()
-    }
-    log_state_update(state_update, "complete_salesforce_workflow")
-
-    return Command(
-        goto=END,
-        update=state_update
-    )
-
-
 # =============================================================================
 # SPECIALISTS CREATION
 # =============================================================================
@@ -561,7 +510,7 @@ Process:
 1. Receive schema analysis request from Schema Supervisor
 2. Use get_salesforce_schema_info() for the requested objects
 3. Analyze and format the schema information
-4. Report results using complete_schema_analysis()
+4. Respond directly with the results, starting with 'SCHEMA_COMPLETE:' followed by the detailed formatted analysis in markdown.
 
 You work with real Salesforce schema data and provide comprehensive analysis.
 You are a specialist, not a supervisor. You execute tasks and report back.
@@ -572,7 +521,7 @@ DEBUG MODE: Detailed logging is enabled for troubleshooting."""
 
     specialist = create_react_agent(
         model=model_selector.get_specialist_model(),
-        tools=[get_salesforce_schema_info, complete_schema_analysis],
+        tools=[get_salesforce_schema_info],
         state_schema=SalesforceAgentState,
         prompt=SystemMessage(content=system_prompt),
         name="schema_specialist"
@@ -601,7 +550,7 @@ Process:
 1. Receive query request from Query Supervisor
 2. Validate and optimize the SOQL query
 3. Execute using execute_soql_query_safe()
-4. Format results and report using complete_query_execution()
+4. Respond directly with the formatted results, starting with 'QUERY_COMPLETE:' followed by the detailed results in markdown.
 
 You handle real SOQL execution with proper safety measures.
 You are a specialist, not a supervisor. You execute tasks and report back.
@@ -612,7 +561,7 @@ DEBUG MODE: Detailed logging is enabled for troubleshooting."""
 
     specialist = create_react_agent(
         model=model_selector.get_specialist_model(),
-        tools=[execute_soql_query_safe, complete_query_execution],
+        tools=[execute_soql_query_safe],
         state_schema=SalesforceAgentState,
         prompt=SystemMessage(content=system_prompt),
         name="query_specialist"
@@ -641,7 +590,7 @@ Process:
 1. Receive validation request from Validation Supervisor
 2. Analyze the specified objects and fields
 3. Run validation checks using validate_salesforce_data()
-4. Report findings using complete_validation_check()
+4. Respond directly with the findings, starting with 'VALIDATION_COMPLETE:' followed by the detailed report in markdown.
 
 You provide comprehensive data quality analysis.
 You are a specialist, not a supervisor. You execute tasks and report back.
@@ -652,7 +601,7 @@ DEBUG MODE: Detailed logging is enabled for troubleshooting."""
 
     specialist = create_react_agent(
         model=model_selector.get_specialist_model(),
-        tools=[validate_salesforce_data, complete_validation_check],
+        tools=[validate_salesforce_data],
         state_schema=SalesforceAgentState,
         prompt=SystemMessage(content=system_prompt),
         name="validation_specialist"
@@ -681,7 +630,7 @@ Process:
 1. Receive analysis request from Analysis Supervisor
 2. Process the provided data using analyze_salesforce_data()
 3. Generate insights and recommendations
-4. Report findings using complete_analysis_task()
+4. Respond directly with the findings, starting with 'ANALYSIS_COMPLETE:' followed by the detailed insights in markdown.
 
 You transform raw Salesforce data into actionable business insights.
 You are a specialist, not a supervisor. You execute tasks and report back.
@@ -692,7 +641,7 @@ DEBUG MODE: Detailed logging is enabled for troubleshooting."""
 
     specialist = create_react_agent(
         model=model_selector.get_specialist_model(),
-        tools=[analyze_salesforce_data, complete_analysis_task],
+        tools=[analyze_salesforce_data],
         state_schema=SalesforceAgentState,
         prompt=SystemMessage(content=system_prompt),
         name="analysis_specialist"
@@ -717,29 +666,38 @@ def _create_schema_supervisor_impl():
 
     schema_specialist = create_schema_specialist()
 
+    def supervisor_review_func(state: SalesforceAgentState) -> dict:
+        """Supervisor review function to pass back specialist response without modification"""
+        agent_logger.debug("SUPERVISOR REVIEW: Passing back specialist response without adding messages")
+        return state
+
     def supervisor_func(state: SalesforceAgentState) -> dict:
         """Prepare task for specialist without adding intermediate message"""
         request = state['messages'][-1].content if 'messages' in state and state['messages'] else state.get('current_task', '')
-        task = f"Perform schema analysis: {request}\nPrioritize core objects like Account. Use get_salesforce_schema_info and complete_schema_analysis to report results."
-        return {"messages": [HumanMessage(content=task)]}
+        task = f"Perform schema analysis: {request}\nPrioritize core objects like Account. Use get_salesforce_schema_info to retrieve schema and respond with results."
+        return {"messages": [SystemMessage(content=task)]}
 
     def end_func(state: SalesforceAgentState) -> dict:
-        """Set result in state"""
+        """Set result in state and keep only final message"""
         if 'messages' in state and state['messages']:
             last_message = state['messages'][-1]
             if hasattr(last_message, 'content'):
                 state['schema_result'] = last_message.content
+            # Keep only the final specialist message
+            state['messages'] = [last_message]
         return state
 
     graph = StateGraph(SalesforceAgentState)
 
-    graph.add_node("supervisor", supervisor_func)
+    graph.add_node("supervisor_prep", supervisor_func)
     graph.add_node("schema_specialist", schema_specialist)
+    graph.add_node("supervisor_review", supervisor_review_func)
     graph.add_node("end_node", end_func)
 
-    graph.add_edge(START, "supervisor")
-    graph.add_edge("supervisor", "schema_specialist")
-    graph.add_edge("schema_specialist", "end_node")
+    graph.add_edge(START, "supervisor_prep")
+    graph.add_edge("supervisor_prep", "schema_specialist")
+    graph.add_edge("schema_specialist", "supervisor_review")
+    graph.add_edge("supervisor_review", "end_node")
     graph.add_edge("end_node", END)
 
     compiled_graph = graph.compile()
@@ -758,29 +716,38 @@ def _create_query_supervisor_impl():
 
     query_specialist = create_query_specialist()
 
+    def supervisor_review_func(state: SalesforceAgentState) -> dict:
+        """Supervisor review function to pass back specialist response without modification"""
+        agent_logger.debug("SUPERVISOR REVIEW: Passing back specialist response without adding messages")
+        return state
+
     def supervisor_func(state: SalesforceAgentState) -> dict:
         """Prepare task for specialist without adding intermediate message"""
         request = state['messages'][-1].content if 'messages' in state and state['messages'] else state.get('current_task', '')
-        task = f"Execute query: {request}\nOptimize and validate. Use execute_soql_query_safe and complete_query_execution to report results."
-        return {"messages": [HumanMessage(content=task)]}
+        task = f"Execute query: {request}\nOptimize and validate. Use execute_soql_query_safe to execute and respond with results."
+        return {"messages": [SystemMessage(content=task)]}
 
     def end_func(state: SalesforceAgentState) -> dict:
-        """Set result in state"""
+        """Set result in state and keep only final message"""
         if 'messages' in state and state['messages']:
             last_message = state['messages'][-1]
             if hasattr(last_message, 'content'):
                 state['query_result'] = last_message.content
+            # Keep only the final specialist message
+            state['messages'] = [last_message]
         return state
 
     graph = StateGraph(SalesforceAgentState)
 
-    graph.add_node("supervisor", supervisor_func)
+    graph.add_node("supervisor_prep", supervisor_func)
     graph.add_node("query_specialist", query_specialist)
+    graph.add_node("supervisor_review", supervisor_review_func)
     graph.add_node("end_node", end_func)
 
-    graph.add_edge(START, "supervisor")
-    graph.add_edge("supervisor", "query_specialist")
-    graph.add_edge("query_specialist", "end_node")
+    graph.add_edge(START, "supervisor_prep")
+    graph.add_edge("supervisor_prep", "query_specialist")
+    graph.add_edge("query_specialist", "supervisor_review")
+    graph.add_edge("supervisor_review", "end_node")
     graph.add_edge("end_node", END)
 
     compiled_graph = graph.compile()
@@ -799,29 +766,38 @@ def _create_validation_supervisor_impl():
 
     validation_specialist = create_validation_specialist()
 
+    def supervisor_review_func(state: SalesforceAgentState) -> dict:
+        """Supervisor review function to pass back specialist response without modification"""
+        agent_logger.debug("SUPERVISOR REVIEW: Passing back specialist response without adding messages")
+        return state
+
     def supervisor_func(state: SalesforceAgentState) -> dict:
         """Prepare task for specialist without adding intermediate message"""
         request = state['messages'][-1].content if 'messages' in state and state['messages'] else state.get('current_task', '')
-        task = f"Validate data: {request}\nCheck quality and rules. Use validate_salesforce_data and complete_validation_check to report findings."
-        return {"messages": [HumanMessage(content=task)]}
+        task = f"Validate data: {request}\nCheck quality and rules. Use validate_salesforce_data to validate and respond with findings."
+        return {"messages": [SystemMessage(content=task)]}
 
     def end_func(state: SalesforceAgentState) -> dict:
-        """Set result in state"""
+        """Set result in state and keep only final message"""
         if 'messages' in state and state['messages']:
             last_message = state['messages'][-1]
             if hasattr(last_message, 'content'):
                 state['validation_result'] = last_message.content
+            # Keep only the final specialist message
+            state['messages'] = [last_message]
         return state
 
     graph = StateGraph(SalesforceAgentState)
 
-    graph.add_node("supervisor", supervisor_func)
+    graph.add_node("supervisor_prep", supervisor_func)
     graph.add_node("validation_specialist", validation_specialist)
+    graph.add_node("supervisor_review", supervisor_review_func)
     graph.add_node("end_node", end_func)
 
-    graph.add_edge(START, "supervisor")
-    graph.add_edge("supervisor", "validation_specialist")
-    graph.add_edge("validation_specialist", "end_node")
+    graph.add_edge(START, "supervisor_prep")
+    graph.add_edge("supervisor_prep", "validation_specialist")
+    graph.add_edge("validation_specialist", "supervisor_review")
+    graph.add_edge("supervisor_review", "end_node")
     graph.add_edge("end_node", END)
 
     compiled_graph = graph.compile()
@@ -840,29 +816,38 @@ def _create_analysis_supervisor_impl():
 
     analysis_specialist = create_analysis_specialist()
 
+    def supervisor_review_func(state: SalesforceAgentState) -> dict:
+        """Supervisor review function to pass back specialist response without modification"""
+        agent_logger.debug("SUPERVISOR REVIEW: Passing back specialist response without adding messages")
+        return state
+
     def supervisor_func(state: SalesforceAgentState) -> dict:
         """Prepare task for specialist without adding intermediate message"""
         request = state['messages'][-1].content if 'messages' in state and state['messages'] else state.get('current_task', '')
-        task = f"Analyze data: {request}\nGenerate insights. Use analyze_salesforce_data and complete_analysis_task to report findings."
-        return {"messages": [HumanMessage(content=task)]}
+        task = f"Analyze data: {request}\nGenerate insights. Use analyze_salesforce_data to analyze and respond with findings."
+        return {"messages": [SystemMessage(content=task)]}
 
     def end_func(state: SalesforceAgentState) -> dict:
-        """Set result in state"""
+        """Set result in state and keep only final message"""
         if 'messages' in state and state['messages']:
             last_message = state['messages'][-1]
             if hasattr(last_message, 'content'):
                 state['analysis_result'] = last_message.content
+            # Keep only the final specialist message
+            state['messages'] = [last_message]
         return state
 
     graph = StateGraph(SalesforceAgentState)
 
-    graph.add_node("supervisor", supervisor_func)
+    graph.add_node("supervisor_prep", supervisor_func)
     graph.add_node("analysis_specialist", analysis_specialist)
+    graph.add_node("supervisor_review", supervisor_review_func)
     graph.add_node("end_node", end_func)
 
-    graph.add_edge(START, "supervisor")
-    graph.add_edge("supervisor", "analysis_specialist")
-    graph.add_edge("analysis_specialist", "end_node")
+    graph.add_edge(START, "supervisor_prep")
+    graph.add_edge("supervisor_prep", "analysis_specialist")
+    graph.add_edge("analysis_specialist", "supervisor_review")
+    graph.add_edge("supervisor_review", "end_node")
     graph.add_edge("end_node", END)
 
     compiled_graph = graph.compile()
@@ -914,14 +899,12 @@ DECISION FRAMEWORK:
 - Analyze user request complexity and intent
 - Determine the appropriate supervisor for the task
 - Use delegation tools to route requests to the right supervisor
-- After results are back (look for COMPLETE in last message), use complete_salesforce_workflow with the final summary
 
 Available delegation tools:
 - delegate_to_schema_supervisor
 - delegate_to_query_supervisor
 - delegate_to_validation_supervisor
 - delegate_to_analysis_supervisor_from_main
-- complete_salesforce_workflow
 
 You orchestrate sophisticated Salesforce operations through supervisor coordination.
 
@@ -933,8 +916,7 @@ DEBUG MODE: Detailed logging is enabled for troubleshooting."""
             delegate_to_schema_supervisor,
             delegate_to_query_supervisor,
             delegate_to_validation_supervisor,
-            delegate_to_analysis_supervisor_from_main,
-            complete_salesforce_workflow
+            delegate_to_analysis_supervisor_from_main
         ],
         state_schema=SalesforceAgentState,
         prompt=SystemMessage(content=main_system_prompt),
@@ -954,18 +936,11 @@ DEBUG MODE: Detailed logging is enabled for troubleshooting."""
     # Add edges
     graph.add_edge(START, "MainSupervisor")
 
-    # Routing function for main supervisor
+    # Routing function for main supervisor (during delegation)
     def route_main_supervisor(state: SalesforceAgentState) -> str:
         """Route based on the last message or state"""
         agent_logger.debug("ROUTING: Main Supervisor analyzing state for routing decision")
-
-        # Check if we have results from child supervisors
-        if state.get('schema_result') or state.get('query_result') or state.get('validation_result') or state.get('analysis_result'):
-            agent_logger.debug("ROUTING: Main Supervisor has results, completing workflow")
-            return END
-
         # Default back to main supervisor for further processing
-        agent_logger.debug("ROUTING: Main Supervisor continuing processing")
         return "MainSupervisor"
 
     # Add conditional edges from main supervisor
@@ -975,11 +950,37 @@ DEBUG MODE: Detailed logging is enabled for troubleshooting."""
         ["MainSupervisor", "SchemaSupervisor", "QuerySupervisor", "ValidationSupervisor", "AnalysisSupervisor", END]
     )
 
-    # Add edges from child supervisors back to main
-    graph.add_edge("SchemaSupervisor", "MainSupervisor")
-    graph.add_edge("QuerySupervisor", "MainSupervisor")
-    graph.add_edge("ValidationSupervisor", "MainSupervisor")
-    graph.add_edge("AnalysisSupervisor", "MainSupervisor")
+    # Routing after sub-supervisors
+    def route_after_sub(state: SalesforceAgentState) -> str:
+        """Route to END if result is set, else back to MainSupervisor"""
+        if state.get('schema_result') or state.get('query_result') or state.get('validation_result') or state.get('analysis_result'):
+            agent_logger.debug("ROUTING: Result present, routing to END")
+            state['completion_timestamp'] = time.time()
+            return END
+        agent_logger.debug("ROUTING: No result, back to MainSupervisor")
+        return "MainSupervisor"
+
+    # Add conditional edges from child supervisors
+    graph.add_conditional_edges(
+        "SchemaSupervisor",
+        route_after_sub,
+        {"MainSupervisor": "MainSupervisor", END: END}
+    )
+    graph.add_conditional_edges(
+        "QuerySupervisor",
+        route_after_sub,
+        {"MainSupervisor": "MainSupervisor", END: END}
+    )
+    graph.add_conditional_edges(
+        "ValidationSupervisor",
+        route_after_sub,
+        {"MainSupervisor": "MainSupervisor", END: END}
+    )
+    graph.add_conditional_edges(
+        "AnalysisSupervisor",
+        route_after_sub,
+        {"MainSupervisor": "MainSupervisor", END: END}
+    )
 
     compiled_graph = graph.compile()
     agent_logger.debug("Created FIXED Main Supervisor successfully with manual graph")
@@ -1187,7 +1188,7 @@ create_langgraph_json()
 # =============================================================================
 
 def validate_fixed_architecture():
-    """Validate the FIXED Salesforce supervisor-specialist communication architecture"""
+    """Validate the FIXED Salesforce supervisor-specialist architecture"""
     agent_logger.info("VALIDATION: Starting FIXED Salesforce architecture validation")
     print("🔍 Validating FIXED Salesforce Supervisor-Specialist Communication Architecture...")
 
