@@ -112,3 +112,6 @@ dmypy.json
 .pyre/
 .pytype/
 cython_debug/
+.langgraph_api
+.txt
+.pckl
