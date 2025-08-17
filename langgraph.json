@@ -1,11 +1,21 @@
 {
   "graphs": {
-    "main_graph": "advanced_hierarchical_agents.py:main_agent_entry"
+    "salesforce_graph": "./fixed_salesforce_hierarchical_agent.py:salesforce_agent_entry",
+    "main_supervisor": "./fixed_salesforce_hierarchical_agent.py:main_supervisor_entry",
+    "schema_supervisor": "./fixed_salesforce_hierarchical_agent.py:schema_supervisor_entry",
+    "query_supervisor": "./fixed_salesforce_hierarchical_agent.py:query_supervisor_entry",
+    "validation_supervisor": "./fixed_salesforce_hierarchical_agent.py:validation_supervisor_entry",
+    "analysis_supervisor": "./fixed_salesforce_hierarchical_agent.py:analysis_supervisor_entry",
+    "schema_specialist": "./fixed_salesforce_hierarchical_agent.py:schema_specialist_entry",
+    "query_specialist": "./fixed_salesforce_hierarchical_agent.py:query_specialist_entry",
+    "validation_specialist": "./fixed_salesforce_hierarchical_agent.py:validation_specialist_entry",
+    "analysis_specialist": "./fixed_salesforce_hierarchical_agent.py:analysis_specialist_entry"
   },
   "dependencies": [
     "langgraph>=0.6.0",
     "langchain-core>=0.3.0",
-    "langchain-openai>=0.2.0"
+    "langchain-openai>=0.2.0",
+    "python-dotenv>=1.0.0"
   ],
   "environment": {
     "OPENAI_API_KEY": {
@@ -13,6 +23,16 @@
     },
     "DATABASE_URL": {
       "required": false
+    },
+    "SALESFORCE_SESSION_ID": {
+      "required": false
+    },
+    "SALESFORCE_INSTANCE": {
+      "required": false
     }
+  },
+  "debug": {
+    "enabled": true,
+    "log_level": "DEBUG"
   }
 }

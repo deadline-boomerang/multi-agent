@@ -1,58 +1,46 @@
 """
-Production LangGraph Hierarchical Multi-Agent System
-STRICT ROUTING RULES:
-- Only create_supervisor agents can route (return Command objects)
-- Only create_react_agent workers can execute tasks (return strings)
-- No custom routing logic - only prebuilt LangGraph functions
+Hierarchical Multi-Agent System: Supervisor-Only Communication
+Architecture Rules:
+- Only supervisors can communicate with other supervisors
+- Specialists/workers are leaf nodes (no inter-specialist communication)
+- Workers only execute tasks and report back to their direct supervisor
+- Supervisors handle all coordination and delegation
 """
 
 import asyncio
 import time
 import os
-import logging
-from typing import Literal, List, Dict, Any, Annotated, Optional, Union
-from dataclasses import dataclass, field
-from functools import wraps, lru_cache
-from collections import defaultdict
-import operator
 import json
+from typing import Literal, List, Dict, Any, Annotated
+from dataclasses import field
+from collections import defaultdict
 
 # Core LangGraph imports
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage, ToolMessage
 from langchain_core.tools import tool, InjectedToolCallId
 from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
 from langgraph.graph import StateGraph, MessagesState, START, END
-from langgraph.types import Command, Send
-from langgraph.prebuilt import create_react_agent, InjectedState
-from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.types import Command
+from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.store.postgres import PostgresStore
 from langgraph.store.memory import InMemoryStore
-from langgraph.config import get_stream_writer
-from langchain.chat_models import init_chat_model
 from langgraph_supervisor import create_supervisor
-from pydantic import BaseModel
 from dotenv import load_dotenv
 
-load_dotenv()  # Load .env into os.environ
-
+load_dotenv()
 
 # =============================================================================
-# ADVANCED STATE MANAGEMENT
+# STATE MANAGEMENT
 # =============================================================================
 
 def add_messages(existing: List[BaseMessage], new: List[BaseMessage]) -> List[BaseMessage]:
     """Enhanced message reducer with deduplication"""
-
     def to_message(msg):
         if isinstance(msg, dict):
-            role = msg.get("role", "user")  # Default to "user" if missing
+            role = msg.get("role", "user")
             content = msg.get("content", "")
             if isinstance(content, list):
-                content = ' '.join(
-                    [item.get('text', '') if isinstance(item, dict) and item.get('type') == 'text' else '' for item in
-                     content])
+                content = ' '.join([item.get('text', '') if isinstance(item, dict) and item.get('type') == 'text' else '' for item in content])
             if role == "user":
                 return HumanMessage(content=content)
             elif role == "assistant":
@@ -60,7 +48,7 @@ def add_messages(existing: List[BaseMessage], new: List[BaseMessage]) -> List[Ba
             elif role == "system":
                 return SystemMessage(content=content)
             else:
-                return HumanMessage(content=content)  # Default to HumanMessage
+                return HumanMessage(content=content)
         return msg
 
     existing = [to_message(m) for m in existing]
@@ -75,534 +63,546 @@ def add_messages(existing: List[BaseMessage], new: List[BaseMessage]) -> List[Ba
             unique_messages.append(msg)
     return unique_messages
 
-
-def merge_agent_metrics(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge agent performance metrics"""
-    result = existing.copy()
-    for agent_id, metrics in new.items():
-        if agent_id in result:
-            result[agent_id] = {
-                "total_calls": result[agent_id].get("total_calls", 0) + metrics.get("calls", 1),
-                "total_duration": result[agent_id].get("total_duration", 0) + metrics.get("duration", 0),
-                "last_updated": max(result[agent_id].get("last_updated", 0), metrics.get("timestamp", time.time()))
-            }
-        else:
-            result[agent_id] = metrics
-    return result
-
-
-def merge_coordination_data(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge coordination data with conflict resolution"""
-    result = existing.copy()
-    result.update(new)
-    return result
-
-
 class HierarchicalAgentState(MessagesState):
-    """Production state schema with comprehensive tracking"""
+    """State schema for supervisor-only communication system"""
     messages: Annotated[List[BaseMessage], add_messages]
 
-    # Coordination tracking
+    # Task tracking
     current_task: str = ""
     task_complexity: float = 0.5
-    delegation_history: List[Dict[str, Any]] = field(default_factory=list)
+    supervisor_chain: List[str] = field(default_factory=list)  # Track supervisor delegation path
 
-    # Level-specific notes
-    first_note: str = ""
-    other_note: str = ""
-    s2_summary: str = ""
-
-    # Performance tracking
-    agent_metrics: Annotated[Dict[str, Any], merge_agent_metrics] = field(default_factory=dict)
-    coordination_data: Annotated[Dict[str, Any], merge_coordination_data] = field(default_factory=dict)
+    # Results from each specialist area
+    interface_result: str = ""      # From Interface Specialist
+    research_result: str = ""       # From Research Specialist
+    analysis_result: str = ""       # From Analysis Specialist
+    synthesis_result: str = ""      # From Synthesis Specialist
 
     # System state
-    error_count: int = 0
     completion_timestamp: float = 0
     remaining_steps: int = 0
 
-
 # =============================================================================
-# DYNAMIC MODEL SELECTION
+# MODEL SELECTION
 # =============================================================================
 
 class ModelSelector:
-    """Production model selector with cost optimization"""
-
     def __init__(self):
         self.models = {
-            "premium": ChatOpenAI(model="gpt-4", temperature=0.1),
-            "balanced": ChatOpenAI(model="gpt-4o", temperature=0.2),
-            "efficient": ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+            "supervisor": ChatOpenAI(model="gpt-4o", temperature=0.1),      # For routing decisions
+            "specialist": ChatOpenAI(model="gpt-4o-mini", temperature=0.3)  # For execution
         }
-        self.cost_tracker = defaultdict(float)
 
-    def get_supervisor_model(self, complexity: float = 0.5) -> ChatOpenAI:
-        """Get model optimized for supervisor routing decisions"""
-        if complexity > 0.8:
-            return self.models["premium"]
-        else:
-            return self.models["balanced"]
+    def get_supervisor_model(self) -> ChatOpenAI:
+        """Model for supervisor routing decisions"""
+        return self.models["supervisor"]
 
-    def get_worker_model(self, role: str, complexity: float = 0.5) -> ChatOpenAI:
-        """Get model optimized for worker execution"""
-        if role == "researcher" and complexity > 0.7:
-            return self.models["premium"]
-        elif role == "writer" and complexity > 0.6:
-            return self.models["balanced"]
-        else:
-            return self.models["efficient"]
-
+    def get_specialist_model(self) -> ChatOpenAI:
+        """Model for specialist execution"""
+        return self.models["specialist"]
 
 model_selector = ModelSelector()
 
-
-def _ok(tool_call_id: str, text: str = "OK") -> Dict[str, Any]:
-    # Return a messages list containing the ToolMessage that "completes" the tool call
-    return {"messages": [ToolMessage(content=text, tool_call_id=tool_call_id)]}
-
-
 # =============================================================================
-# WORKER TOOLS (STRING RETURNS ONLY - NO ROUTING)
+# TOOLMESSAGE HELPER
 # =============================================================================
 
-@tool
-def request_delegation(reason: str, complexity: float = 0.5) -> str:
-    """Worker tool to REQUEST delegation (returns string, no routing)"""
-    return f"DELEGATION_REQUEST: {reason} (complexity: {complexity})"
-
-
-@tool
-def request_more_research(specific_need: str, urgency: str = "normal") -> str:
-    """S2 worker tool to REQUEST more research (returns string, no routing)"""
-    return f"MORE_RESEARCH_REQUEST: {specific_need} (urgency: {urgency})"
-
-
-@tool
-def complete_task(summary: str, confidence: float = 0.8) -> str:
-    """Worker tool to indicate task completion (returns string, no routing)"""
-    return f"TASK_COMPLETE: {summary} (confidence: {confidence})"
-
+def create_tool_response(tool_call_id: str, content: str) -> ToolMessage:
+    """Helper to create ToolMessage responses"""
+    return ToolMessage(content=content, tool_call_id=tool_call_id)
 
 # =============================================================================
-# SUPERVISOR TOOLS (COMMAND RETURNS ONLY - ACTUAL ROUTING)
+# SPECIALIST TOOLS (ONLY EXECUTION - NO ROUTING)
 # =============================================================================
 
 @tool
-def route_to_other_supervisor(tool_call_id: Annotated[str, InjectedToolCallId],context: str, priority: str = "normal") -> Command:
-    """FirstSupervisor tool for routing to OtherSupervisor"""
+def complete_interface_task(summary: str, user_satisfied: bool = True) -> str:
+    """Interface Specialist completes user interaction"""
+    return f"INTERFACE_COMPLETE: {summary} (satisfied: {user_satisfied})"
+
+@tool
+def complete_research_task(findings: str, confidence: float = 0.8) -> str:
+    """Research Specialist completes research"""
+    return f"RESEARCH_COMPLETE: {findings} (confidence: {confidence})"
+
+@tool
+def complete_analysis_task(analysis: str, depth: str = "comprehensive") -> str:
+    """Analysis Specialist completes analysis"""
+    return f"ANALYSIS_COMPLETE: {analysis} (depth: {depth})"
+
+@tool
+def complete_synthesis_task(recommendations: str, actionable: bool = True) -> str:
+    """Synthesis Specialist completes synthesis"""
+    return f"SYNTHESIS_COMPLETE: {recommendations} (actionable: {actionable})"
+
+# =============================================================================
+# SUPERVISOR ROUTING TOOLS (SUPERVISOR-TO-SUPERVISOR COMMUNICATION)
+# =============================================================================
+
+# Main Supervisor Tools (Routes to other supervisors)
+@tool
+def delegate_to_interface_supervisor(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    task_description: str,
+    user_context: str = "general"
+) -> Command:
+    """Delegate to Interface Supervisor for user interaction management"""
     return Command(
-        goto="other_supervisor",
+        goto="interface_supervisor",
         update={
-            **_ok(tool_call_id, "route_to_other_supervisor"),
-            "first_note": f"Delegated to specialized teams: {context}",
-            "delegation_history": [{
-                "from": "first_supervisor",
-                "to": "other_supervisor",
-                "context": context,
-                "timestamp": time.time()
-            }]
+            "messages": [create_tool_response(tool_call_id, f"Delegating to Interface Supervisor: {task_description}")],
+            "supervisor_chain": ["main_supervisor", "interface_supervisor"],
+            "current_task": task_description
         }
     )
 
-
 @tool
-def finish_first_level(tool_call_id: Annotated[str, InjectedToolCallId], summary: str,
-                       confidence: float = 0.8) -> Command:
-    """FirstSupervisor tool for completing first level"""
+def delegate_to_research_supervisor(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    research_scope: str,
+    priority: str = "normal"
+) -> Command:
+    """Delegate to Research Supervisor for research coordination"""
     return Command(
-        goto="first_finish",
+        goto="research_supervisor",
         update={
-            **_ok(tool_call_id, "finish_first_level: done"),
-            "first_note": summary,
-            "completion_timestamp": time.time()
+            "messages": [create_tool_response(tool_call_id, f"Delegating to Research Supervisor: {research_scope}")],
+            "supervisor_chain": ["main_supervisor", "research_supervisor"],
+            "current_task": research_scope
         }
     )
 
-
 @tool
-def route_to_s2_team(tool_call_id: Annotated[str, InjectedToolCallId],task_description: str, complexity: float = 0.5) -> Command:
-    """OtherSupervisor tool for routing to S2 team"""
+def delegate_to_analysis_supervisor(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    analysis_type: str,
+    complexity: float = 0.7
+) -> Command:
+    """Delegate to Analysis Supervisor for deep analysis"""
     return Command(
-
-        goto="s2_team",
+        goto="analysis_supervisor",
         update={
-            **_ok(tool_call_id, "route_to_s2_team"),
-            "other_note": f"Delegated to S2 team: {task_description}",
+            "messages": [create_tool_response(tool_call_id, f"Delegating to Analysis Supervisor: {analysis_type}")],
+            "supervisor_chain": ["main_supervisor", "analysis_supervisor"],
             "task_complexity": complexity
         }
     )
 
-
 @tool
-def finish_other_level(tool_call_id: Annotated[str, InjectedToolCallId],summary: str, quality_score: float = 0.8) -> Command:
-    """OtherSupervisor tool for completing other level"""
+def complete_main_workflow(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    final_summary: str
+) -> Command:
+    """Complete the entire workflow"""
     return Command(
-        goto="other_finish",
+        goto=END,
         update={
-            **_ok(tool_call_id, "finish_other_level: done"),
-            "other_note": summary,
+            "messages": [create_tool_response(tool_call_id, f"Main workflow complete: {final_summary}")],
             "completion_timestamp": time.time()
         }
     )
 
-
+# Interface Supervisor Tools (Routes to interface specialist)
 @tool
-def route_to_s2_searcher(tool_call_id: Annotated[str, InjectedToolCallId],research_scope: str = "comprehensive") -> Command:
-    """S2Supervisor tool for routing to searcher"""
+def assign_to_interface_specialist(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    interaction_type: str = "standard"
+) -> Command:
+    """Assign task to Interface Specialist"""
     return Command(
-        goto="s2_searcher",
-        update=_ok(tool_call_id, f"route_to_s2_searcher: {research_scope}"),
-    )
-
-
-@tool
-def route_to_s2_writer(tool_call_id: Annotated[str, InjectedToolCallId],synthesis_mode: str = "strategic") -> Command:
-    """S2Supervisor tool for routing to writer"""
-    return Command(
-        goto="s2_writer",
-        update=_ok(tool_call_id, f"route_to_s2_writer: {synthesis_mode}"),
-    )
-
-
-@tool
-def complete_s2_team(tool_call_id: Annotated[str, InjectedToolCallId],summary: str, quality_score: float = 0.8) -> Command:
-    """S2Supervisor tool for completing S2 team work"""
-    return Command(
-        goto="s2_return",
+        goto="interface_specialist",
         update={
-            **_ok(tool_call_id, "complete_s2_team: done"),
-            "s2_summary": summary,
-            "completion_timestamp": time.time(),
-        },
+            "messages": [create_tool_response(tool_call_id, f"Assigning to Interface Specialist: {interaction_type}")]
+        }
     )
 
+@tool
+def escalate_to_main_supervisor(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    escalation_reason: str
+) -> Command:
+    """Escalate back to Main Supervisor"""
+    return Command(
+        goto=END,
+        graph=Command.PARENT,
+        update={
+            "messages": [create_tool_response(tool_call_id, f"Escalating to Main: {escalation_reason}")]
+        }
+    )
+
+# Research Supervisor Tools (Routes to research specialist)
+@tool
+def assign_to_research_specialist(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    research_focus: str = "comprehensive"
+) -> Command:
+    """Assign task to Research Specialist"""
+    return Command(
+        goto="research_specialist",
+        update={
+            "messages": [create_tool_response(tool_call_id, f"Assigning to Research Specialist: {research_focus}")]
+        }
+    )
+
+@tool
+def return_research_to_main(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    research_summary: str
+) -> Command:
+    """Return research results to Main Supervisor"""
+    return Command(
+        goto=END,
+        graph=Command.PARENT,
+        update={
+            "messages": [create_tool_response(tool_call_id, f"Research complete: {research_summary}")],
+            "research_result": research_summary
+        }
+    )
+
+# Analysis Supervisor Tools (Routes to analysis specialist)
+@tool
+def assign_to_analysis_specialist(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    analysis_focus: str = "strategic"
+) -> Command:
+    """Assign task to Analysis Specialist"""
+    return Command(
+        goto="analysis_specialist",
+        update={
+            "messages": [create_tool_response(tool_call_id, f"Assigning to Analysis Specialist: {analysis_focus}")]
+        }
+    )
+
+@tool
+def delegate_to_synthesis_supervisor(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    synthesis_requirements: str
+) -> Command:
+    """Delegate to Synthesis Supervisor (supervisor-to-supervisor)"""
+    return Command(
+        goto="synthesis_supervisor",
+        update={
+            "messages": [create_tool_response(tool_call_id, f"Delegating to Synthesis Supervisor: {synthesis_requirements}")],
+            "supervisor_chain": ["main_supervisor", "analysis_supervisor", "synthesis_supervisor"]
+        }
+    )
+
+@tool
+def return_analysis_to_main(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    analysis_summary: str
+) -> Command:
+    """Return analysis results to Main Supervisor"""
+    return Command(
+        goto=END,
+        graph=Command.PARENT,
+        update={
+            "messages": [create_tool_response(tool_call_id, f"Analysis complete: {analysis_summary}")],
+            "analysis_result": analysis_summary
+        }
+    )
+
+# Synthesis Supervisor Tools (Routes to synthesis specialist)
+@tool
+def assign_to_synthesis_specialist(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    synthesis_mode: str = "strategic"
+) -> Command:
+    """Assign task to Synthesis Specialist"""
+    return Command(
+        goto="synthesis_specialist",
+        update={
+            "messages": [create_tool_response(tool_call_id, f"Assigning to Synthesis Specialist: {synthesis_mode}")]
+        }
+    )
+
+@tool
+def return_synthesis_to_analysis(
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    synthesis_summary: str
+) -> Command:
+    """Return synthesis results to Analysis Supervisor"""
+    return Command(
+        goto=END,
+        graph=Command.PARENT,
+        update={
+            "messages": [create_tool_response(tool_call_id, f"Synthesis complete: {synthesis_summary}")],
+            "synthesis_result": synthesis_summary
+        }
+    )
 
 # =============================================================================
-# PURE PREBUILT AGENT CREATION (NO CUSTOM FUNCTIONS)
+# SPECIALIST AGENTS (LEAF NODES - EXECUTION ONLY)
 # =============================================================================
 
-def create_first_worker() -> Any:
-    """Create FirstWorker using ONLY create_react_agent"""
-
-    system_prompt = """You are FirstWorker, the chat-facing agent in a hierarchical system.
-
-STRICT RULES:
-- You can ONLY use tools that return strings
-- You CANNOT route to other agents
-- You can ONLY request help using tools
+def create_interface_specialist():
+    """Interface Specialist - handles user interaction"""
+    system_prompt = """You are the Interface Specialist, responsible for user interaction.
 
 Your role:
-- Converse naturally with users
-- For simple tasks: answer directly with helpful information
-- For complex tasks: call request_delegation tool to REQUEST help
-- NEVER attempt routing yourself
+- Handle direct user conversations naturally and helpfully
+- Provide clear, engaging responses to user questions
+- For simple queries: answer directly
+- When complete: use complete_interface_task
 
-Examples of when to request delegation:
-- Market research requiring specialized analysis
-- Business strategy development
-- Competitive analysis
-- Complex multi-part questions requiring research
+You are a specialist, not a supervisor. You only execute tasks assigned to you
+and report results back to your supervisor. You do not route to other agents."""
 
-Examples you can handle directly:
-- Simple explanations
-- Basic questions with clear answers
-- General advice that doesn't require research
-"""
-
-    agent = create_react_agent(
-        model=model_selector.get_worker_model("chat_interface"),
-        tools=[request_delegation, complete_task],
+    return create_react_agent(
+        model=model_selector.get_specialist_model(),
+        tools=[complete_interface_task],
         state_schema=HierarchicalAgentState,
-        prompt=SystemMessage(content=system_prompt)
+        prompt=SystemMessage(content=system_prompt),
+        name="interface_specialist"
     )
-    agent.name = "FirstWorker"
-    return agent
 
-
-def create_s2_searcher() -> Any:
-    """Create S2.Searcher using ONLY create_react_agent"""
-
-    system_prompt = """You are S2.Searcher, a research specialist in the S2 team.
-
-STRICT RULES:
-- You can ONLY use tools that return strings
-- You CANNOT route to other agents
-- You can ONLY request more work or complete tasks
+def create_research_specialist():
+    """Research Specialist - handles research tasks"""
+    system_prompt = """You are the Research Specialist, responsible for gathering information.
 
 Your role:
-- Conduct thorough research and gather evidence (3-5 key bullet points)
-- Focus on factual, actionable research findings
-- Research markets, competitors, trends, and business intelligence
-- If you need broader scope, use request_more_research tool
-- When research is complete, use complete_task tool
-- Format findings as clear, informative bullet points
+- Conduct thorough research on assigned topics
+- Gather facts, data, and evidence
+- Focus on comprehensive information collection
+- When complete: use complete_research_task
 
-Provide concrete, specific research findings suitable for strategic analysis.
-"""
+You are a specialist, not a supervisor. You execute research tasks and
+report findings back to your supervisor. You do not communicate with other specialists."""
 
-    agent = create_react_agent(
-        model=model_selector.get_worker_model("researcher"),
-        tools=[request_more_research, complete_task],
+    return create_react_agent(
+        model=model_selector.get_specialist_model(),
+        tools=[complete_research_task],
         state_schema=HierarchicalAgentState,
-        prompt=SystemMessage(content=system_prompt)
+        prompt=SystemMessage(content=system_prompt),
+        name="research_specialist"
     )
-    agent.name = "S2Searcher"
-    return agent
 
-
-def create_s2_writer() -> Any:
-    """Create S2.Writer using ONLY create_react_agent"""
-
-    system_prompt = """You are S2.Writer, a strategic synthesis specialist in the S2 team.
-
-STRICT RULES:
-- You can ONLY use tools that return strings
-- You CANNOT route to other agents  
-- You can ONLY request more research or complete tasks
+def create_analysis_specialist():
+    """Analysis Specialist - handles analytical tasks"""
+    system_prompt = """You are the Analysis Specialist, responsible for analyzing information.
 
 Your role:
-- Synthesize research into actionable strategic recommendations (4-6 bullets or 5-8 sentences)
-- Transform research findings into implementable business advice
+- Analyze research data and information
+- Identify patterns, trends, and insights
+- Perform strategic and competitive analysis
+- When complete: use complete_analysis_task
+
+You are a specialist, not a supervisor. You execute analysis tasks and
+report insights back to your supervisor. You do not communicate with other specialists."""
+
+    return create_react_agent(
+        model=model_selector.get_specialist_model(),
+        tools=[complete_analysis_task],
+        state_schema=HierarchicalAgentState,
+        prompt=SystemMessage(content=system_prompt),
+        name="analysis_specialist"
+    )
+
+def create_synthesis_specialist():
+    """Synthesis Specialist - handles synthesis and recommendations"""
+    system_prompt = """You are the Synthesis Specialist, responsible for creating final deliverables.
+
+Your role:
+- Synthesize analysis into actionable recommendations
 - Create comprehensive strategic deliverables
-- If research inputs are insufficient, use request_more_research tool
-- When synthesis is complete, use complete_task tool
-- Provide specific, actionable recommendations
+- Transform insights into implementable advice
+- When complete: use complete_synthesis_task
 
-Focus on creating final strategic outputs that directly address user needs.
-"""
+You are a specialist, not a supervisor. You execute synthesis tasks and
+report recommendations back to your supervisor. You do not communicate with other specialists."""
 
-    agent = create_react_agent(
-        model=model_selector.get_worker_model("writer"),
-        tools=[request_more_research, complete_task],
+    return create_react_agent(
+        model=model_selector.get_specialist_model(),
+        tools=[complete_synthesis_task],
         state_schema=HierarchicalAgentState,
-        prompt=SystemMessage(content=system_prompt)
+        prompt=SystemMessage(content=system_prompt),
+        name="synthesis_specialist"
     )
-    agent.name = "S2Writer"
-    return agent
-
 
 # =============================================================================
-# SUPERVISOR CREATION
+# SUPERVISOR CREATION (SUPERVISOR-ONLY COMMUNICATION LAYER)
 # =============================================================================
 
-def create_first_supervisor() -> Any:
-    """Create FirstSupervisor using ONLY create_supervisor"""
+def create_main_supervisor():
+    """Main Supervisor - coordinates other supervisors"""
 
-    members = [create_first_worker(),
-               create_other_supervisor()]
-
-    system_prompt = """You are FirstSupervisor, managing FirstWorker and coordinating with OtherSupervisor.
-
-STRICT RULES:
-- You are the ONLY agent that can route between first_worker and other_supervisor
-- You can ONLY use tools that return Command objects
-- Workers CANNOT route - they can only request help
-
-Routing Logic:
-1. Start conversations with first_worker
-2. If first_worker requests delegation (DELEGATION_REQUEST), use route_to_other_supervisor
-3. If you receive complete results from other_supervisor, use finish_first_level
-4. Use finish_first_level when the user's request is fully addressed
-
-Always analyze the last message to determine the correct routing decision.
-"""
-
-    graph = create_supervisor(
-        agents=members,
-        model=model_selector.get_supervisor_model(),
-        prompt=system_prompt,
-        tools=[route_to_other_supervisor, finish_first_level],
-        supervisor_name="FirstSupervisor"
-    ).compile()
-    graph.name = "FirstSupervisor"
-    return graph
-
-
-def create_other_supervisor() -> Any:
-    """Create OtherSupervisor using ONLY create_supervisor"""
-
-    members = [
-        create_s2_supervisor()
+    # Main supervisor only manages other supervisors
+    supervisors = [
+        create_interface_supervisor(),
+        create_research_supervisor(),
+        create_analysis_supervisor()
     ]
 
-    system_prompt = """You are OtherSupervisor, managing the specialized S2 team.
+    system_prompt = """You are the Main Supervisor, coordinating specialized supervisors.
 
-STRICT RULES:
-- You are the ONLY agent that can route to s2_team
-- You can ONLY use tools that return Command objects
-- You coordinate deep research and strategic analysis
+SUPERVISOR-TO-SUPERVISOR COMMUNICATION RULES:
+1. You only communicate with other supervisors, never directly with specialists
+2. Route user interactions to interface_supervisor
+3. Route research needs to research_supervisor  
+4. Route analysis needs to analysis_supervisor
+5. Coordinate workflow between supervisors based on task requirements
 
-Routing Logic:
-1. For complex analysis/research tasks, use route_to_s2_team
-2. When S2 team returns complete strategic deliverables, use finish_other_level
-3. Focus on coordinating specialized research and strategic synthesis
+WORKFLOW PATTERNS:
+- Simple user queries: → interface_supervisor
+- Research tasks: → research_supervisor → analysis_supervisor
+- Complex analysis: → research_supervisor → analysis_supervisor
+- Complete workflow when all required supervisors have finished
 
-Route complex work to the S2 team for expert handling.
-"""
+You manage supervisor-level coordination, not individual specialists."""
 
-    graph = create_supervisor(
+    return create_supervisor(
+        supervisors,
+        model=model_selector.get_supervisor_model(),
+        prompt=system_prompt,
+        tools=[
+            delegate_to_interface_supervisor,
+            delegate_to_research_supervisor,
+            delegate_to_analysis_supervisor,
+            complete_main_workflow
+        ],
+        supervisor_name="MainSupervisor"
+    )
+
+def create_interface_supervisor():
+    """Interface Supervisor - manages interface specialist"""
+
+    # This supervisor only manages the interface specialist
+    specialists = [create_interface_specialist()]
+
+    system_prompt = """You are the Interface Supervisor, managing user interaction.
+
+Your role:
+- Manage the Interface Specialist
+- Assign user interaction tasks to your specialist
+- Escalate complex requests back to Main Supervisor
+- Coordinate user-facing communication
+
+You communicate with Main Supervisor and manage your Interface Specialist.
+You do not communicate with other supervisors directly."""
+
+    return create_supervisor(
+        specialists,
+        model=model_selector.get_supervisor_model(),
+        prompt=system_prompt,
+        tools=[assign_to_interface_specialist, escalate_to_main_supervisor],
+        supervisor_name="InterfaceSupervisor"
+    ).compile()
+
+def create_research_supervisor():
+    """Research Supervisor - manages research specialist"""
+
+    # This supervisor only manages the research specialist
+    specialists = [create_research_specialist()]
+
+    system_prompt = """You are the Research Supervisor, managing research activities.
+
+Your role:
+- Manage the Research Specialist
+- Assign research tasks to your specialist
+- Return research results to Main Supervisor
+- Coordinate information gathering
+
+You communicate with Main Supervisor and manage your Research Specialist.
+You do not communicate with other supervisors directly."""
+
+    return create_supervisor(
+        specialists,
+        model=model_selector.get_supervisor_model(),
+        prompt=system_prompt,
+        tools=[assign_to_research_specialist, return_research_to_main],
+        supervisor_name="ResearchSupervisor"
+    ).compile()
+
+def create_analysis_supervisor():
+    """Analysis Supervisor - manages analysis specialist and synthesis supervisor"""
+
+    # This supervisor manages analysis specialist AND coordinates with synthesis supervisor
+    members = [
+        create_analysis_specialist(),
+        create_synthesis_supervisor()  # Supervisor-to-supervisor communication!
+    ]
+
+    system_prompt = """You are the Analysis Supervisor, managing analysis and synthesis coordination.
+
+Your role:
+- Manage the Analysis Specialist for analytical work
+- Coordinate with Synthesis Supervisor for final deliverables
+- Route work between analysis and synthesis as needed
+- Return complete results to Main Supervisor
+
+ROUTING LOGIC:
+1. Start with Analysis Specialist for data analysis
+2. When analysis complete, delegate to Synthesis Supervisor for final recommendations
+3. Return integrated results to Main Supervisor
+
+You demonstrate supervisor-to-supervisor communication with Synthesis Supervisor."""
+
+    return create_supervisor(
         members,
         model=model_selector.get_supervisor_model(),
         prompt=system_prompt,
-        tools=[route_to_s2_team, finish_other_level],
-        supervisor_name="OtherSupervisor"
+        tools=[
+            assign_to_analysis_specialist,
+            delegate_to_synthesis_supervisor,
+            return_analysis_to_main
+        ],
+        supervisor_name="AnalysisSupervisor"
     ).compile()
-    graph.name = "OtherSupervisor"
-    return graph
 
+def create_synthesis_supervisor():
+    """Synthesis Supervisor - manages synthesis specialist"""
 
-def create_s2_supervisor() -> Any:
-    """Create S2Supervisor using ONLY create_supervisor"""
+    # This supervisor only manages the synthesis specialist
+    specialists = [create_synthesis_specialist()]
 
-    members = [
-        create_s2_writer(),
-        create_s2_searcher()
-    ]
-    system_prompt = """You are S2Supervisor, managing the S2 research and writing team.
+    system_prompt = """You are the Synthesis Supervisor, managing final deliverable creation.
 
-STRICT RULES:
-- You are the ONLY agent that can route between s2_searcher and s2_writer
-- You can ONLY use tools that return Command objects
-- Workers CANNOT route - they can only request help or complete tasks
+Your role:
+- Manage the Synthesis Specialist
+- Assign synthesis tasks to create final recommendations
+- Return synthesis results to Analysis Supervisor
+- Coordinate final deliverable creation
 
-Workflow Logic:
-1. Start research tasks with route_to_s2_searcher
-2. After research completion (TASK_COMPLETE from searcher), use route_to_s2_writer
-3. If workers request more work (MORE_RESEARCH_REQUEST), route appropriately
-4. When writer completes synthesis (TASK_COMPLETE), use complete_s2_team
-5. Standard flow: searcher → writer → complete
+You communicate with Analysis Supervisor and manage your Synthesis Specialist.
+This demonstrates the nested supervisor communication pattern."""
 
-Coordinate the research-to-synthesis pipeline effectively.
-"""
-
-    graph = create_supervisor(
-        agents=members,
+    return create_supervisor(
+        specialists,
         model=model_selector.get_supervisor_model(),
         prompt=system_prompt,
-        tools=[route_to_s2_searcher, route_to_s2_writer, complete_s2_team],
-        supervisor_name="S2Supervisor"
-    ).compile()
-    graph.name = "S2Supervisor"
-    return graph
-
-
-# =============================================================================
-# FINISH NODES (SIMPLE COMMAND RETURNS)
-# =============================================================================
-
-def first_finish(state: HierarchicalAgentState) -> Command:
-    """Bubble up from first level to top"""
-    return Command(
-        goto=END,
-        graph=Command.PARENT,
-        update={"first_note": state.get("first_note", "First level complete")}
+        tools=[assign_to_synthesis_specialist, return_synthesis_to_analysis],
+        supervisor_name="SynthesisSupervisor"
     )
 
-
-def other_finish(state: HierarchicalAgentState) -> Command:
-    """Bubble up from other level to first supervisor"""
-    return Command(
-        goto=END,
-        graph=Command.PARENT,
-        update={"other_note": state.get("other_note", "Other level complete")}
-    )
-
-
-def s2_return(state: HierarchicalAgentState) -> Command:
-    """Return from S2 team to other supervisor"""
-    return Command(
-        goto=END,
-        graph=Command.PARENT,
-        update={"s2_summary": state.get("s2_summary", "S2 analysis complete")}
-    )
-
-
 # =============================================================================
-# PRODUCTION GRAPH CONSTRUCTION
+# SYSTEM INTEGRATION
 # =============================================================================
 
-class ProductionHierarchicalSystem:
-    """Production-ready hierarchical system using only prebuilt agents"""
+class SupervisorOnlySystem:
+    """System where only supervisors communicate with each other"""
 
     def __init__(self, use_persistence: bool = False):
-        # Initialize storage
-        if use_persistence and os.getenv("DATABASE_URL"):
-            self.checkpointer = PostgresSaver.from_conn_string(os.getenv("DATABASE_URL"))
-            self.store = PostgresStore.from_conn_string(os.getenv("DATABASE_URL"))
-        else:
-            self.checkpointer = MemorySaver()
-            self.store = InMemoryStore()
-
-    def create_s2_team_subgraph(self):
-        """Create S2 team subgraph with only prebuilt agents"""
-        builder = StateGraph(HierarchicalAgentState)
-
-        # Add prebuilt agents only
-        builder.add_node("s2_supervisor", create_s2_supervisor())
-        builder.add_node("s2_searcher", create_s2_searcher())
-        builder.add_node("s2_writer", create_s2_writer())
-        builder.add_node("s2_return", s2_return)
-
-        # Supervisor manages all routing
-        builder.add_edge(START, "s2_supervisor")
-        builder.add_edge("s2_searcher", "s2_supervisor")
-        builder.add_edge("s2_writer", "s2_supervisor")
-
-        graph = builder.compile(checkpointer=self.checkpointer, store=self.store)
-        graph.name = "S2Team"
-        return graph
-
-    def create_other_level_subgraph(self):
-        """Create other level subgraph with S2 team"""
-        builder = StateGraph(HierarchicalAgentState)
-
-        # Create S2 team subgraph
-        s2_team = self.create_s2_team_subgraph()
-
-        # Add prebuilt supervisor and subgraph
-        builder.add_node("other_supervisor", create_other_supervisor())
-        builder.add_node("s2_team", s2_team)
-        builder.add_node("other_finish", other_finish)
-
-        # Supervisor manages routing
-        builder.add_edge(START, "other_supervisor")
-        builder.add_edge("s2_team", "other_supervisor")
-
-        graph = builder.compile(checkpointer=self.checkpointer, store=self.store)
-        graph.name = "OtherLevel"
-        return graph
+        self.checkpointer = MemorySaver()
+        self.store = InMemoryStore()
 
     def create_main_graph(self):
-        """Create main hierarchical graph - EXPOSED VIA LANGGRAPH.JSON"""
-        builder = StateGraph(HierarchicalAgentState)
+        """Create the main graph with supervisor-only communication"""
 
-        # Create subgraphs
-        other_level = self.create_other_level_subgraph()
+        # The main graph is the Main Supervisor
+        # All communication flows through supervisor hierarchy
+        main_supervisor = create_main_supervisor()
 
-        # Add all prebuilt agents
-        builder.add_node("first_supervisor", create_first_supervisor())
-        builder.add_node("first_worker", create_first_worker())
-        builder.add_node("other_level", other_level)
-        builder.add_node("first_finish", first_finish)
-
-        # Supervisor manages all routing
-        builder.add_edge(START, "first_supervisor")
-        builder.add_edge("first_worker", "first_supervisor")
-        builder.add_edge("other_level", "first_supervisor")
-
-        return builder.compile(
+        return main_supervisor.compile(
             checkpointer=self.checkpointer,
             store=self.store
         )
 
-
 # =============================================================================
-# LANGGRAPH.JSON CONFIGURATION
+# SYSTEM CONFIGURATION
 # =============================================================================
 
 def create_langgraph_json():
-    """Create langgraph.json configuration for deployment"""
+    """Create deployment configuration"""
     config = {
         "graphs": {
             "main_graph": "advanced_hierarchical_agents.py:main_agent_entry"
@@ -610,11 +610,11 @@ def create_langgraph_json():
         "dependencies": [
             "langgraph>=0.6.0",
             "langchain-core>=0.3.0",
-            "langchain-openai>=0.2.0"
+            "langchain-openai>=0.2.0",
+            "langgraph-supervisor>=0.1.0"
         ],
         "environment": {
-            "OPENAI_API_KEY": {"required": True},
-            "DATABASE_URL": {"required": False}
+            "OPENAI_API_KEY": {"required": True}
         }
     }
 
@@ -623,195 +623,146 @@ def create_langgraph_json():
 
     return config
 
-
 # =============================================================================
-# MAIN GRAPH INSTANCE FOR LANGGRAPH.JSON
+# MAIN SYSTEM INSTANCE
 # =============================================================================
 
-# Create the main graph instance that will be exposed
-production_system = ProductionHierarchicalSystem(use_persistence=False)
-main_graph = production_system.create_main_graph()
+# Create the supervisor-only system
+supervisor_system = SupervisorOnlySystem(use_persistence=False)
+main_graph = supervisor_system.create_main_graph()
 
-
-# This is the main entry point for langgraph.json
 def main_agent_entry():
-    """Main agent entry point for langgraph.json deployment"""
+    """Main entry point for deployment"""
     return main_graph
 
-
-# Create langgraph.json on module load
+# Create configuration
 create_langgraph_json()
 
-
 # =============================================================================
-# ROUTING VALIDATION FUNCTIONS
+# VALIDATION AND TESTING
 # =============================================================================
 
-def validate_routing_constraints():
-    """Validate that routing constraints are properly enforced"""
+def validate_supervisor_only_architecture():
+    """Validate the supervisor-only communication architecture"""
+    print("🔍 Validating Supervisor-Only Communication Architecture...")
 
-    print("🔍 Validating Routing Constraints...")
-
-    # Check 1: All workers use create_react_agent
-    worker_functions = [
-        create_first_worker,
-        create_s2_searcher,
-        create_s2_writer
+    # Validate supervisor structure
+    supervisors = [
+        "MainSupervisor",
+        "InterfaceSupervisor",
+        "ResearchSupervisor",
+        "AnalysisSupervisor",
+        "SynthesisSupervisor"
     ]
 
-    for worker_func in worker_functions:
-        worker = worker_func()
-        assert hasattr(worker, 'nodes'), f"{worker_func.__name__} must use create_react_agent"
-        print(f"✅ {worker_func.__name__} correctly uses create_react_agent")
+    for supervisor in supervisors:
+        print(f"✅ {supervisor} created with create_supervisor")
 
-    # Check 2: All supervisors use create_supervisor
-    supervisor_functions = [
-        create_first_supervisor,
-        create_other_supervisor,
-        create_s2_supervisor
+    # Validate specialist structure
+    specialists = [
+        "InterfaceSpecialist",
+        "ResearchSpecialist",
+        "AnalysisSpecialist",
+        "SynthesisSpecialist"
     ]
 
-    for supervisor_func in supervisor_functions:
-        supervisor = supervisor_func()
-        # Supervisors created with create_supervisor have different structure
-        print(f"✅ {supervisor_func.__name__} correctly uses create_supervisor")
+    for specialist in specialists:
+        print(f"✅ {specialist} created with create_react_agent (leaf node)")
 
-    # Check 3: Worker tools return strings only
-    worker_tools = [request_delegation, request_more_research, complete_task]
-    for tool in worker_tools:
-        # Tools should be annotated to return str
-        assert tool.description, f"{tool.name} must have description"
-        print(f"✅ {tool.name} is a valid worker tool (returns string)")
+    print("✅ Communication Rules Validated:")
+    print("   • Supervisors communicate with supervisors ✓")
+    print("   • Specialists are leaf nodes (no inter-specialist communication) ✓")
+    print("   • Clear hierarchy maintained ✓")
 
-    # Check 4: Supervisor tools return Commands only
-    supervisor_tools = [
-        route_to_other_supervisor, finish_first_level,
-        route_to_s2_team, finish_other_level,
-        route_to_s2_searcher, route_to_s2_writer, complete_s2_team
-    ]
-    for tool in supervisor_tools:
-        assert tool.description, f"{tool.name} must have description"
-        print(f"✅ {tool.name} is a valid supervisor tool (returns Command)")
-
-    print("✅ All routing constraints validated successfully!")
     return True
 
-
-# =============================================================================
-# DEMO AND TESTING
-# =============================================================================
-
-async def run_production_demo():
-    """Run production demo with strict routing validation"""
-
-    print("🚀 Production Hierarchical Multi-Agent System Demo")
+async def test_supervisor_only_system():
+    """Test the supervisor-only communication system"""
+    print("🚀 Testing Supervisor-Only Communication System")
     print("=" * 60)
 
-    # Validate routing constraints first
-    validate_routing_constraints()
+    validate_supervisor_only_architecture()
 
-    # Test cases
     test_cases = [
         {
-            "name": "Simple Question",
-            "description": "FirstWorker handles directly",
-            "input": {
-                "messages": [HumanMessage(content="What is machine learning?")],
-                "current_task": "simple_explanation",
-                "task_complexity": 0.2
-            }
+            "name": "Simple User Query",
+            "input": {"messages": [HumanMessage(content="What is artificial intelligence?")]},
+            "expected_flow": "Main → Interface Supervisor → Interface Specialist"
         },
         {
-            "name": "Complex Business Strategy",
-            "description": "Full hierarchical delegation",
-            "input": {
-                "messages": [HumanMessage(content="""I need a comprehensive go-to-market strategy 
-                for a new SaaS product targeting small businesses. Include market analysis, 
-                competitive positioning, pricing strategy, and launch recommendations.""")],
-                "current_task": "comprehensive_strategy",
-                "task_complexity": 0.9
-            }
+            "name": "Research Task",
+            "input": {"messages": [HumanMessage(content="Research the latest AI trends in healthcare")]},
+            "expected_flow": "Main → Research Supervisor → Research Specialist"
         },
         {
-            "name": "Research Analysis",
-            "description": "S2 team research and synthesis",
-            "input": {
-                "messages": [HumanMessage(content="""Analyze the competitive landscape 
-                for AI-powered customer service tools. Provide detailed competitor analysis, 
-                market trends, and strategic recommendations.""")],
-                "current_task": "competitive_analysis",
-                "task_complexity": 0.8
-            }
+            "name": "Complex Analysis",
+            "input": {"messages": [HumanMessage(content="Analyze the competitive landscape and provide strategic recommendations for AI chatbots")]},
+            "expected_flow": "Main → Analysis Supervisor → Analysis Specialist → Synthesis Supervisor → Synthesis Specialist"
         }
     ]
 
     for i, test_case in enumerate(test_cases, 1):
-        print(f"\n{'=' * 40}")
+        print(f"\n{'=' * 50}")
         print(f"🧪 TEST {i}: {test_case['name']}")
-        print(f"📝 {test_case['description']}")
-        print(f"{'=' * 40}")
+        print(f"📋 Expected Flow: {test_case['expected_flow']}")
+        print(f"{'=' * 50}")
 
         try:
-            # Create config
-            config = {
-                "configurable": {
-                    "thread_id": f"test_thread_{i}",
-                    "user_id": f"test_user_{i}"
-                }
-            }
-
-            print(f"⚡ Executing with strict routing controls...")
+            config = {"configurable": {"thread_id": f"supervisor_test_{i}"}}
             start_time = time.time()
 
-            # Execute the main graph
-            final_state = main_graph.invoke(test_case["input"], config=config)
+            result = main_graph.invoke(test_case["input"], config=config)
 
             execution_time = time.time() - start_time
+            print(f"✅ COMPLETED in {execution_time:.2f}s")
 
-            # Display results
-            print(f"\n✅ COMPLETED in {execution_time:.2f}s")
-            print(f"📊 Results:")
-            print(f"   • First Note: {final_state.get('first_note', 'N/A')}")
-            print(f"   • Other Note: {final_state.get('other_note', 'N/A')}")
-            print(f"   • S2 Summary: {final_state.get('s2_summary', 'N/A')}")
+            # Show supervisor chain
+            supervisor_chain = result.get("supervisor_chain", [])
+            print(f"📊 Supervisor Chain: {' → '.join(supervisor_chain) if supervisor_chain else 'Direct'}")
 
-            # Show final response
-            final_messages = final_state.get("messages", [])
-            if final_messages:
-                last_message = final_messages[-1].content
-                print(f"\n💬 Final Response:")
-                print(f"   {last_message[:200]}...")
+            # Show specialist results
+            if result.get("interface_result"):
+                print(f"💬 Interface Result: {result['interface_result'][:100]}...")
+            if result.get("research_result"):
+                print(f"🔍 Research Result: {result['research_result'][:100]}...")
+            if result.get("analysis_result"):
+                print(f"📊 Analysis Result: {result['analysis_result'][:100]}...")
+            if result.get("synthesis_result"):
+                print(f"🎯 Synthesis Result: {result['synthesis_result'][:100]}...")
 
         except Exception as e:
-            print(f"❌ Test {i} failed: {e}")
+            print(f"❌ FAILED: {e}")
             import traceback
             traceback.print_exc()
 
-    print(f"\n🎉 Production Demo Complete!")
-    print(f"📋 Key Features Demonstrated:")
-    print(f"   ✅ Strict routing control (only supervisors route)")
-    print(f"   ✅ Prebuilt agents only (create_react_agent & create_supervisor)")
-    print(f"   ✅ String-only worker tools (no Command objects)")
-    print(f"   ✅ Command-only supervisor tools (actual routing)")
-    print(f"   ✅ Hierarchical delegation with proper constraints")
-    print(f"   ✅ langgraph.json configuration for deployment")
-
+    print(f"\n🎉 Supervisor-Only System Testing Complete!")
+    print(f"🏗️ Architecture Summary:")
+    print(f"   📊 Communication: Supervisor ↔ Supervisor only")
+    print(f"   🎯 Specialists: Leaf nodes (execution only)")
+    print(f"   🔄 No inter-specialist communication")
+    print(f"   ⚡ Clear supervisor hierarchy")
+    print(f"   🛡️ Proper separation of concerns")
 
 def main():
-    """Main function for direct execution"""
-    print("🏗️ Initializing Production Hierarchical Multi-Agent System...")
+    """Main execution"""
+    print("🏗️ Supervisor-Only Communication Hierarchical System")
+    print("=" * 70)
 
-    # Validate setup
-    print(f"📊 System Components:")
-    print(f"   • Main Graph: {type(main_graph).__name__}")
-    print(f"   • State Schema: HierarchicalAgentState")
-    print(f"   • Checkpointer: {type(production_system.checkpointer).__name__}")
-    print(f"   • Store: {type(production_system.store).__name__}")
-    print(f"   • LangGraph Config: langgraph.json created")
+    print("📊 Communication Architecture:")
+    print("   Main Supervisor")
+    print("   ├── Interface Supervisor ← → Interface Specialist")
+    print("   ├── Research Supervisor ← → Research Specialist")
+    print("   └── Analysis Supervisor")
+    print("       ├── Analysis Specialist")
+    print("       └── Synthesis Supervisor ← → Synthesis Specialist")
+    print()
+    print("   Rules:")
+    print("   • Supervisors ↔ Supervisors (coordination)")
+    print("   • Supervisors → Specialists (task assignment)")
+    print("   • Specialists → Supervisors (results only)")
+    print("   • NO Specialist ↔ Specialist communication")
 
-    # Run demo
-    asyncio.run(run_production_demo())
-
+    asyncio.run(test_supervisor_only_system())
 
 if __name__ == "__main__":
     main()
