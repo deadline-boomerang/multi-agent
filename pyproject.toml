@@ -7,6 +7,7 @@ dependencies = [
     "langchain>=0.3.27",
     "langchain-anthropic>=0.3.18",
     "langchain-openai>=0.3.30",
+    "langchain-postgres>=0.0.15",
     "langgraph>=0.6.5",
     "langgraph-checkpoint-postgres>=2.0.23",
     "langgraph-cli[inmem]>=0.3.6",
@@ -19,4 +20,5 @@ dependencies = [
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",
     "python-dotenv>=1.1.1",
+    "simple-salesforce>=1.12.7",
 ]

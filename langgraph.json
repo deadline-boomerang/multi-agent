@@ -16,6 +16,9 @@
     "langgraph-supervisor>=0.1.0",
     "langchain-core>=0.3.0",
     "langchain-openai>=0.2.0",
+    "langchain-postgres>=0.1.0",
+    "simple-salesforce>=1.12.0",
+    "psycopg2>=2.9.0",
     "python-dotenv>=1.0.0"
   ],
   "environment": {
@@ -23,13 +26,13 @@
       "required": true
     },
     "DATABASE_URL": {
-      "required": false
+      "required": true
     },
     "SALESFORCE_SESSION_ID": {
-      "required": false
+      "required": true
     },
     "SALESFORCE_INSTANCE": {
-      "required": false
+      "required": true
     }
   },
   "debug": {

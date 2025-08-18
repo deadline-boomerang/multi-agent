@@ -18,9 +18,6 @@ Key Changes:
 - NEW: Fixed Salesforce describe_object to use getattr(self.salesforce_client, sobject_type).describe()
 - NEW: Enhanced get_salesforce_schema tool to properly extract and format fields and types from describe response.
 - NEW: Added error handling in specialist prompts to prevent infinite loops on tool errors.
-- NEW: Updated child supervisor prompts to use correct handoff tool name 'assign_to_[SpecialistName]' to ensure delegation to specialists.
-- NEW: Enhanced supervisor prompts to wait for specialist results before final response or transfer.
-- NEW: Made child supervisor prompts more explicit to always delegate using the tool and not respond prematurely.
 """
 
 import asyncio
@@ -866,7 +863,7 @@ def _create_schema_supervisor_impl():
 
     prompt = """You are the Schema Supervisor managing the schema specialist.
 
-Always delegate the task to the specialist by using the 'assign_to_SchemaSpecialist' tool with the appropriate query. Do not respond or summarize until you have the results from the specialist.
+Given the user request, delegate to the specialist by using the 'next' tool with the query.
 
 The specialist will respond with results.
 
@@ -898,7 +895,7 @@ def _create_query_supervisor_impl():
 
     prompt = """You are the Query Supervisor managing the query specialist.
 
-Always delegate the task to the specialist by using the 'assign_to_QuerySpecialist' tool with the appropriate query. Do not respond or summarize until you have the results from the specialist.
+Given the user request, delegate to the specialist by using the 'next' tool with the query.
 
 The specialist will respond with results.
 
@@ -930,7 +927,7 @@ def _create_validation_supervisor_impl():
 
     prompt = """You are the Validation Supervisor managing the validation specialist.
 
-Always delegate the task to the specialist by using the 'assign_to_ValidationSpecialist' tool with the appropriate query. Do not respond or summarize until you have the results from the specialist.
+Given the user request, delegate to the specialist by using the 'next' tool with the query.
 
 The specialist will respond with results.
 
@@ -962,7 +959,7 @@ def _create_analysis_supervisor_impl():
 
     prompt = """You are the Analysis Supervisor managing the analysis specialist.
 
-Always delegate the task to the specialist by using the 'assign_to_AnalysisSpecialist' tool with the appropriate query. Do not respond or summarize until you have the results from the specialist.
+Given the user request, delegate to the specialist by using the 'next' tool with the query.
 
 The specialist will respond with results.
 
@@ -1445,9 +1442,6 @@ SALESFORCE HIERARCHICAL AGENT (Real Integrations)
 - Fixed Salesforce describe_object to use getattr(self.salesforce_client, sobject_type).describe()
 - Enhanced get_salesforce_schema tool to properly extract and format fields and types from describe response.
 - Added error handling in specialist prompts to prevent infinite loops on tool errors.
-- Updated child supervisor prompts to use correct handoff tool name 'assign_to_[SpecialistName]' to ensure delegation to specialists.
-- Enhanced supervisor prompts to wait for specialist results before final response or transfer.
-- Made child supervisor prompts more explicit to always delegate using the tool and not respond prematurely.
 
 ## Usage:
 
